@@ -26,7 +26,7 @@
 
 /* [1] Constructors and destructors */
 
-SmtpClient::SmtpClient(const QString & host, int port, ConnectionType connectionType) :
+SmtpClient::SmtpClient(const QString & host, int port, ConnectionType ct, QSslConfiguration *configuration) :
     state(UnconnectedState),
     host(host),
     port(port),
@@ -36,7 +36,7 @@ SmtpClient::SmtpClient(const QString & host, int port, ConnectionType connection
     isMailSent(false),
     isReset(false)
 {
-    setConnectionType(connectionType);
+    setConnectionType(connectionType, configuration);
 
     connect(socket, SIGNAL(stateChanged(QAbstractSocket::SocketState)),
             this, SLOT(socketStateChanged(QAbstractSocket::SocketState)));
@@ -158,7 +158,7 @@ void SmtpClient::sendMail(const MimeMessage & email)
 
 void SmtpClient::quit()
 {
-    changeState(_QUITTING_State);
+    changeState(DisconnectingState);
 }
 
 void SmtpClient::reset()
@@ -220,41 +220,38 @@ bool SmtpClient::waitForReset(int msec)
     return isReset;
 }
 
-bool SmtpClient::waitForDisconnected(int msec)
-{
-
-    if (!isReadyConnected)
-        return false;
-
-    waitForEvent(msec, SIGNAL(disconnected()));
-
-    return !isReadyConnected;
-}
-
 /* [3] --- */
 
 
 /* [4] Protected methods */
 
-void SmtpClient::setConnectionType(ConnectionType ct)
+void SmtpClient::setConnectionType(ConnectionType ct, QSslConfiguration *configuration)
 {
-    this->connectionType = ct;
+    Q_ASSERT(!socket);
 
+    this->connectionType = ct;
     switch (connectionType)
-    {
-    case TcpConnection:
+    {        
+    case TcpConnection:    
         socket = new QTcpSocket(this);
         break;
-    case SslConnection:
     case TlsConnection:
+    case SslConnection:    
+        // create secure socket
         socket = new QSslSocket(this);
-        connect(socket, SIGNAL(encrypted()),
-                this, SLOT(socketEncrypted()));
+
+        Q_ASSERT(configuration);
+        reinterpret_cast<QSslSocket*>(socket)->setSslConfiguration(*configuration);
+
+        connect(socket, SIGNAL(encrypted()), this, SLOT(socketEncrypted()));
         break;
     }
 }
 
-void SmtpClient::changeState(SmtpClient::ClientState state) {
+void SmtpClient::changeState(SmtpClient::ClientState state)
+{
+    Q_ASSERT(socket);
+
     this->state = state;
 
 #ifdef QT_NO_DEBUG
@@ -293,22 +290,9 @@ void SmtpClient::changeState(SmtpClient::ClientState state) {
         changeState(_MAIL_0_FROM);
         break;
 
-    case _QUITTING_State:
-        sendMessage("QUIT");
-        break;
-
     case DisconnectingState:
-
-        // Server should disconnect after sending reply to QUIT command, but disconnecting here takes care of a non-compliantserver.
+        sendMessage("QUIT");
         socket->disconnectFromHost();
-        isReadyConnected = false;
-        break;
-
-    case UnconnectedState:
-        isReadyConnected = false;
-        isAuthenticated = false;
-
-        emit disconnected();
         break;
 
     case ResetState:
@@ -471,16 +455,6 @@ void SmtpClient::processResponse() {
         changeState((connectionType != TlsConnection) ? _READY_Connected : _TLS_State);
         break;
 
-    case _QUITTING_State:
-        // The response code needs to be 221.
-        if (responseCode != 221) {
-            emitError(ClientError);
-            return;
-        }
-        changeState(DisconnectingState);
-
-        break;
-
     /* --- TLS --- */
     case _TLS_0_STARTTLS:
         // The response code needs to be 220.
@@ -574,13 +548,14 @@ void SmtpClient::processResponse() {
 
 void SmtpClient::sendMessage(const QString &text)
 {
+    Q_ASSERT(socket);
 
 #ifndef QT_NO_DEBUG
     qDebug() << "[Socket] OUT:" << text;
 #endif
 
-    socket->write(text.toUtf8() + "\r\n");
     socket->flush();
+    socket->write(text.toUtf8() + "\r\n");
 }
 
 void SmtpClient::emitError(SmtpClient::SmtpError e)
@@ -594,9 +569,9 @@ void SmtpClient::waitForEvent(int msec, const char *successSignal)
     QObject::connect(this, successSignal, &loop, SLOT(quit()));
     QObject::connect(this, SIGNAL(error(SmtpClient::SmtpError)), &loop, SLOT(quit()));
 
-    QTimer timer;
     if(msec > 0)
     {
+        QTimer timer;
         timer.setSingleShot(true);
         connect(&timer, SIGNAL(timeout()), &loop, SLOT(quit()));
         timer.start(msec);
@@ -641,6 +616,8 @@ void SmtpClient::socketError(QAbstractSocket::SocketError socketError) {
 
 void SmtpClient::socketReadyRead()
 {
+    Q_ASSERT(socket);
+
     QString responseLine;
 
     if (!socket->isOpen()) {
@@ -661,12 +638,13 @@ void SmtpClient::socketReadyRead()
 
 
     // Is this the last line of the response
-    if (responseLine.length() > 3 && responseLine[3] == ' ') {
+    if (responseLine[3] == ' ') {
         responseText = tempResponse;
         tempResponse = "";
 
         // Extract the respose code from the server's responce (first 3 digits)
         responseCode = responseLine.left(3).toInt();
+        emit(responseChanged(responseCode, responseText));
 
         // Check for server error
         if (responseCode / 100 == 4) {
