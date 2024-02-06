@@ -26,7 +26,7 @@
 
 /* [1] Constructors and destructors */
 
-SmtpClient::SmtpClient(const QString & host, int port, ConnectionType ct, QSslConfiguration *configuration) :
+SmtpClient::SmtpClient(const QString & host, int port, ConnectionType connectionType) :
     state(UnconnectedState),
     host(host),
     port(port),
@@ -36,7 +36,7 @@ SmtpClient::SmtpClient(const QString & host, int port, ConnectionType ct, QSslCo
     isMailSent(false),
     isReset(false)
 {
-    setConnectionType(connectionType, configuration);
+    setConnectionType(connectionType);
 
     connect(socket, SIGNAL(stateChanged(QAbstractSocket::SocketState)),
             this, SLOT(socketStateChanged(QAbstractSocket::SocketState)));
@@ -220,38 +220,40 @@ bool SmtpClient::waitForReset(int msec)
     return isReset;
 }
 
+void SmtpClient::setConfiguration(const QSslConfiguration *configuration)
+{
+
+    socket = new QSslSocket(this);
+    connect(socket, SIGNAL(encrypted()),this, SLOT(socketEncrypted()));
+
+    // Setzen der SSL-Konfiguration
+    reinterpret_cast<QSslSocket*>(socket)->setSslConfiguration(*configuration);
+
+}
 /* [3] --- */
 
 
 /* [4] Protected methods */
 
-void SmtpClient::setConnectionType(ConnectionType ct, QSslConfiguration *configuration)
+void SmtpClient::setConnectionType(ConnectionType ct)
 {
-    Q_ASSERT(!socket);
-
     this->connectionType = ct;
+
     switch (connectionType)
-    {        
-    case TcpConnection:    
+    {
+    case TcpConnection:
         socket = new QTcpSocket(this);
         break;
+    case SslConnection:
     case TlsConnection:
-    case SslConnection:    
-        // create secure socket
-        socket = new QSslSocket(this);
-
-        Q_ASSERT(configuration);
-        reinterpret_cast<QSslSocket*>(socket)->setSslConfiguration(*configuration);
-
-        connect(socket, SIGNAL(encrypted()), this, SLOT(socketEncrypted()));
+        socket = new QSslSocket(this);        
+        connect(socket, SIGNAL(encrypted()),
+                this, SLOT(socketEncrypted()));        
         break;
     }
 }
 
-void SmtpClient::changeState(SmtpClient::ClientState state)
-{
-    Q_ASSERT(socket);
-
+void SmtpClient::changeState(SmtpClient::ClientState state) {
     this->state = state;
 
 #ifdef QT_NO_DEBUG
@@ -548,7 +550,6 @@ void SmtpClient::processResponse() {
 
 void SmtpClient::sendMessage(const QString &text)
 {
-    Q_ASSERT(socket);
 
 #ifndef QT_NO_DEBUG
     qDebug() << "[Socket] OUT:" << text;
@@ -584,7 +585,6 @@ void SmtpClient::waitForEvent(int msec, const char *successSignal)
 
 
 /* [5] Slots for the socket's signals */
-
 void SmtpClient::socketStateChanged(QAbstractSocket::SocketState state) {
 
 #ifndef QT_NO_DEBUG
@@ -616,8 +616,6 @@ void SmtpClient::socketError(QAbstractSocket::SocketError socketError) {
 
 void SmtpClient::socketReadyRead()
 {
-    Q_ASSERT(socket);
-
     QString responseLine;
 
     if (!socket->isOpen()) {
@@ -635,8 +633,6 @@ void SmtpClient::socketReadyRead()
 #endif
     }
 
-
-
     // Is this the last line of the response
     if (responseLine[3] == ' ') {
         responseText = tempResponse;
@@ -644,7 +640,6 @@ void SmtpClient::socketReadyRead()
 
         // Extract the respose code from the server's responce (first 3 digits)
         responseCode = responseLine.left(3).toInt();
-        emit(responseChanged(responseCode, responseText));
 
         // Check for server error
         if (responseCode / 100 == 4) {

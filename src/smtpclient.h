@@ -24,7 +24,6 @@
 #include <QEventLoop>
 #include "smtpmime_global.h"
 #include "mimemessage.h"
-#include <QSslConfiguration>
 
 
 class SMTP_MIME_EXPORT SmtpClient : public QObject
@@ -104,9 +103,9 @@ public:
 
     /* [1] Constructors and Destructors */
 
-    SmtpClient(const QString & host = "localhost", int port = 25, ConnectionType ct = ConnectionType::TcpConnection, QSslConfiguration *configuration = nullptr);
+    SmtpClient(const QString & host = "localhost", int port = 25, ConnectionType ct = TcpConnection);
 
-    virtual ~SmtpClient();
+    ~SmtpClient();
 
     /* [1] --- */
 
@@ -140,8 +139,8 @@ public:
     bool waitForAuthenticated(int msec = 30000);
     bool waitForMailSent(int msec = 30000);
     bool waitForReset(int msec = 30000);
-    void setConnectionType(ConnectionType ct, QSslConfiguration *configuration = nullptr);
 
+    void setConfiguration(const QSslConfiguration *configuration);
 
     /* [3] --- */
 
@@ -164,12 +163,6 @@ protected:
     const QString host;
     const int port;
     ConnectionType connectionType;
-
-    // certificate & private key for later use
-    QString certificatePemPath;
-    QString privateKey;
-    QSslCertificate cert;
-    const QSslConfiguration *configuration;
 
     QString name;
 
@@ -197,6 +190,7 @@ protected:
 
     /* [5] Protected methods */
     void login();
+    void setConnectionType(ConnectionType ct);
     void changeState(ClientState state);
     void processResponse();
     void sendMessage(const QString &text);
@@ -229,9 +223,9 @@ signals:
     void mailSent();
     void mailReset();
     void disconnected();
-    void responseChanged(int responseCode, const QString &responseText);
+    void responseCodeChanged(int responseCode, const QString &responseText);
 
-    /* [7] --- */    
+    /* [7] --- */
 
 };
 
