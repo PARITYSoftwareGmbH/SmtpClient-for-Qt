@@ -223,9 +223,6 @@ bool SmtpClient::waitForReset(int msec)
 void SmtpClient::setConfiguration(const QSslConfiguration *configuration)
 {
 
-    socket = new QSslSocket(this);
-    connect(socket, SIGNAL(encrypted()),this, SLOT(socketEncrypted()));
-
     // Setzen der SSL-Konfiguration
     reinterpret_cast<QSslSocket*>(socket)->setSslConfiguration(*configuration);
 
